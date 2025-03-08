@@ -1,5 +1,5 @@
 import argparse
-import random
+import yaml
 import logging
 import math
 import os
@@ -12,14 +12,16 @@ import accelerate
 import numpy as np
 import PIL
 from PIL import Image
+
 import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint
 from torch.utils.data import RandomSampler
+
 import transformers
 from accelerate import Accelerator
 from accelerate.logging import get_logger
-from accelerate.utils import ProjectConfiguration, set_seed
+from accelerate.utils import ProjectConfiguration
 from huggingface_hub import create_repo, upload_folder
 from packaging import version
 from tqdm.auto import tqdm
@@ -29,14 +31,15 @@ from einops import rearrange
 import diffusers
 from diffusers import AutoencoderKLTemporalDecoder
 from diffusers.optimization import get_scheduler
-from diffusers.utils import check_min_version, deprecate, load_image
+from diffusers.utils import check_min_version, load_image
 
-from torch.utils.data import Dataset
 from comp_model.flow_comp_raft import RAFT_bi
 from comp_model.recurrent_flow_completion import RecurrentFlowCompleteNet
 from FFF_VDI.modules.unet import UNetSpatioTemporalConditionModel
 from FFF_VDI.pipelines.pipeline_fff_vdi import StableVideoDiffusionPipeline
-from utils import create_random_shape_with_random_motion, create_random_square_with_random_motion, find_square_mask
+
+from dataset import InpaintDataset
+from utils import find_square_mask
 
 
 # Will error if the minimal version of diffusers is not installed. Remove at your own risks.
@@ -49,109 +52,6 @@ def rand_log_normal(shape, loc=0., scale=1., device='cpu', dtype=torch.float32):
     """Draws samples from an lognormal distribution."""
     u = torch.rand(shape, dtype=dtype, device=device) * (1 - 2e-7) + 1e-7
     return torch.distributions.Normal(loc, scale).icdf(u).exp()
-
-
-class DummyDataset(Dataset):
-    def __init__(self, num_samples=100000, width=1024, height=576, sample_frames=25):        
-        self.num_samples = num_samples
-        # Define the path to the folder containing video frames
-        self.base_folder = '/SSD1/dataset/youtube-vos'
-        
-        self.img_folders = []
-        self.mask_folders = []
-
-        for (path, dir, files) in os.walk(self.base_folder, 'JPEGImages'):
-            for filename in files:
-                ext = os.path.splitext(filename)[-1]
-                if ext == '.jpg':
-                    if path not in self.img_folders:
-                        if len(os.listdir(path)) > sample_frames:
-                            self.img_folders.append(path)
-        
-        self.channels = 3
-        self.width = width
-        self.height = height
-        self.sample_frames = sample_frames
-
-    def __len__(self):
-        return self.num_samples
-    
-    def get_img_tensor(self, img_frames, img_folder_path):
-        pixel_values = torch.empty((len(img_frames), self.channels, self.height, self.width))
-
-        for i, frame_name in enumerate(img_frames):
-            img_frame_path = os.path.join(img_folder_path, frame_name)
-            
-            img = Image.open(img_frame_path)
-            img_resized = img.resize((self.width, self.height))
-            img_tensor = torch.from_numpy(np.array(img_resized)).float()
-
-            # Normalize the image by scaling pixel values to [-1, 1]
-            img_normalized = img_tensor / 127.5 - 1
-
-            # Rearrange channels if necessary
-            if self.channels == 3:
-                img_normalized = img_normalized.permute(2, 0, 1)  # For RGB images
-            elif self.channels == 1:
-                img_normalized = img_normalized.mean(dim=2, keepdim=True)  # For grayscale images
-
-            pixel_values[i] = img_normalized
-        
-        return pixel_values
-    
-    def get_mask_tensor(self, mask_frames):
-        mask_values = torch.empty((len(mask_frames), 1, self.height, self.width))
-
-        for i, mask in enumerate(mask_frames):
-            mask_tensor = torch.from_numpy(np.array(mask)).float()
-            mask_tensor = mask_tensor / 255.0
-            mask_values[i] = mask_tensor.unsqueeze(0)
-        
-        return mask_values
-
-
-    def __getitem__(self, idx):
-        chosen_img_folder = random.choice(self.img_folders)
-        img_folder_path = os.path.join(self.base_folder, chosen_img_folder)
-        img_frames = os.listdir(img_folder_path)
-        img_frames.sort()
-
-        # Randomly select a start index for frame sequence
-        img_start_idx = random.randint(0, len(img_frames) - self.sample_frames)
-        selected_img_frames = img_frames[img_start_idx:img_start_idx + self.sample_frames]
-
-        # masks = create_random_shape_with_random_motion(len(selected_img_frames), imageHeight=self.height, imageWidth=self.width)
-        masks = create_random_square_with_random_motion(len(selected_img_frames), imageHeight=self.height, imageWidth=self.width)
-
-        # Initialize a tensor to store the pixel values
-        pixel_values = torch.empty((self.sample_frames, self.channels, self.height, self.width))
-        mask_values = torch.empty((self.sample_frames, 1, self.height, self.width))
-
-        # Load and process each frame
-        for i, frame_name in enumerate(selected_img_frames):
-            img_frame_path = os.path.join(img_folder_path, frame_name)
-            
-            img = Image.open(img_frame_path)
-            img_resized = img.resize((self.width, self.height))
-            img_tensor = torch.from_numpy(np.array(img_resized)).float()
-
-            # Normalize the image by scaling pixel values to [-1, 1]
-            img_normalized = img_tensor / 127.5 - 1
-
-            mask = masks[i]
-            mask_tensor = torch.from_numpy(np.array(mask)).float()
-            mask_tensor = mask_tensor / 255.0
-
-            # Rearrange channels if necessary
-            if self.channels == 3:
-                img_normalized = img_normalized.permute(2, 0, 1)  # For RGB images
-            elif self.channels == 1:
-                img_normalized = img_normalized.mean(dim=2, keepdim=True)  # For grayscale images
-
-            pixel_values[i] = img_normalized
-            mask_values[i] = mask_tensor.unsqueeze(0)
-
-        return {'pixel_values': pixel_values, 'mask_values': mask_values}
 
 # resizing utils
 # TODO: clean up later
@@ -277,16 +177,6 @@ def export_to_video(video_frames, output_video_path, fps):
 
 
 def export_to_gif(frames, output_gif_path, fps):
-    """
-    Export a list of frames to a GIF.
-
-    Args:
-    - frames (list): List of frames (as numpy arrays or PIL Image objects).
-    - output_gif_path (str): Path to save the output GIF.
-    - duration_ms (int): Duration of each frame in milliseconds.
-
-    """
-    # Convert numpy arrays to PIL Images if needed
     pil_frames = [Image.fromarray(frame) if isinstance(
         frame, np.ndarray) else frame for frame in frames]
 
@@ -334,12 +224,12 @@ def parse_args():
     parser.add_argument(
         "--width",
         type=int,
-        default=1024,
+        default=512,
     )
     parser.add_argument(
         "--height",
         type=int,
-        default=576,
+        default=256,
     )
     parser.add_argument(
         "--num_validation_images",
@@ -350,7 +240,7 @@ def parse_args():
     parser.add_argument(
         "--validation_steps",
         type=int,
-        default=500,
+        default=1000,
         help=(
             "Run fine-tuning validation every X epochs. The validation process consists of running the text/image prompt"
             " multiple times: `args.num_validation_images`."
@@ -361,9 +251,6 @@ def parse_args():
         type=str,
         default="./outputs",
         help="The output directory where the model predictions and checkpoints will be written.",
-    )
-    parser.add_argument(
-        "--seed", type=int, default=None, help="A seed for reproducible training."
     )
     parser.add_argument(
         "--per_gpu_batch_size",
@@ -383,11 +270,6 @@ def parse_args():
         type=int,
         default=1,
         help="Number of updates steps to accumulate before performing a backward/update pass.",
-    )
-    parser.add_argument(
-        "--gradient_checkpointing",
-        action="store_true",
-        help="Whether or not to use gradient checkpointing to save memory at the expense of slower backward pass.",
     )
     parser.add_argument(
         "--learning_rate",
@@ -421,32 +303,6 @@ def parse_args():
         type=float,
         default=0.1,
         help="Conditioning dropout probability. Drops out the conditionings (image and edit prompt) used in training InstructPix2Pix. See section 3.2.1 in the paper: https://arxiv.org/abs/2211.09800.",
-    )
-    parser.add_argument(
-        "--use_8bit_adam",
-        action="store_true",
-        help="Whether or not to use 8-bit Adam from bitsandbytes.",
-    )
-    parser.add_argument(
-        "--allow_tf32",
-        action="store_true",
-        help=(
-            "Whether or not to allow TF32 on Ampere GPUs. Can be used to speed up training. For more information, see"
-            " https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices"
-        ),
-    )
-    parser.add_argument(
-        "--use_ema", action="store_true", help="Whether to use EMA model."
-    )
-    parser.add_argument(
-        "--non_ema_revision",
-        type=str,
-        default=None,
-        required=False,
-        help=(
-            "Revision of pretrained non-ema model identifier. Must be a branch, tag or git identifier of the local or"
-            " remote repository specified with --pretrained_model_name_or_path."
-        ),
     )
     parser.add_argument(
         "--num_workers",
@@ -570,16 +426,23 @@ def parse_args():
     )
 
     args = parser.parse_args()
+    config = load_config("./config.yaml")
+    args = merge_args_with_config(args, config)
     env_local_rank = int(os.environ.get("LOCAL_RANK", -1))
     if env_local_rank != -1 and env_local_rank != args.local_rank:
         args.local_rank = env_local_rank
 
-    # default to using the same revision for the non-ema model if not specified
-    if args.non_ema_revision is None:
-        args.non_ema_revision = args.revision
-
     return args
 
+def load_config(yaml_path):
+    with open(yaml_path, 'r') as f:
+        return yaml.safe_load(f)
+
+def merge_args_with_config(args, config):
+    for key, value in config.items():
+        if getattr(args, key, None) is None:
+            setattr(args, key, value)
+    return args
 
 def download_image(url):
     original_image = (
@@ -593,29 +456,18 @@ def download_image(url):
 def main():
     args = parse_args()
 
-    if args.non_ema_revision is not None:
-        deprecate(
-            "non_ema_revision!=None",
-            "0.15.0",
-            message=(
-                "Downloading 'non_ema' weights from revision branches of the Hub is deprecated. Please make sure to"
-                " use `--variant=non_ema` instead."
-            ),
-        )
     logging_dir = os.path.join(args.output_dir, args.logging_dir)
     accelerator_project_config = ProjectConfiguration(
         project_dir=args.output_dir, logging_dir=logging_dir)
-    # ddp_kwargs = DistributedDataParallelKwargs(find_unused_parameters=True)
+
     accelerator = Accelerator(
         gradient_accumulation_steps=args.gradient_accumulation_steps,
         mixed_precision=args.mixed_precision,
         log_with=args.report_to,
         project_config=accelerator_project_config,
-        # kwargs_handlers=[ddp_kwargs]
     )
 
-    generator = torch.Generator(
-        device=accelerator.device).manual_seed(args.seed)
+    generator = torch.Generator(device=accelerator.device)
 
     # Make one log on every process with the configuration for debugging.
     logging.basicConfig(
@@ -630,10 +482,6 @@ def main():
     else:
         transformers.utils.logging.set_verbosity_error()
         diffusers.utils.logging.set_verbosity_error()
-
-    # If passed along, set the training seed now.
-    if args.seed is not None:
-        set_seed(args.seed)
 
     # Handle the repository creation
     if accelerator.is_main_process:
@@ -704,14 +552,6 @@ def main():
         accelerator.register_save_state_pre_hook(save_model_hook)
         accelerator.register_load_state_pre_hook(load_model_hook)
 
-    if args.gradient_checkpointing:
-        unet.enable_gradient_checkpointing()
-
-    # Enable TF32 for faster training on Ampere GPUs,
-    # cf https://pytorch.org/docs/stable/notes/cuda.html#tensorfloat-32-tf32-on-ampere-devices
-    if args.allow_tf32:
-        torch.backends.cuda.matmul.allow_tf32 = True
-
     if args.scale_lr:
         args.learning_rate = (args.learning_rate * args.gradient_accumulation_steps * args.per_gpu_batch_size * accelerator.num_processes)
 
@@ -755,8 +595,9 @@ def main():
 
     # DataLoaders creation:
     args.global_batch_size = args.per_gpu_batch_size * accelerator.num_processes
-
-    train_dataset = DummyDataset(width=args.width, height=args.height, sample_frames=args.num_frames)
+    
+    data_root = args.data_root
+    train_dataset = InpaintDataset(data_root, width=args.width, height=args.height, sample_frames=args.num_frames)
     sampler = RandomSampler(train_dataset)
     train_dataloader = torch.utils.data.DataLoader(
         train_dataset,
