@@ -67,7 +67,14 @@ We use the [YouTube-VOS]([http://saliencydetection.net/duts](https://youtube-vos
             └── ...
 ```
 
+## Training
+Modify the data path in config.yaml. You can train the model with following command:
+```bash
+accelerate accelerate launch train.py
+```
+We strongly recommend an environment with 8 or more GPUs with 80GB of VRAM for training.
+
 ## TODO
-- [ ] Add training details 
+- [x] Add training details 
 - [ ] Add DNA module
 - [ ] Add long video inference code
