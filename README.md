@@ -31,3 +31,22 @@ Propagation-based video inpainting using optical flow at the pixel or feature le
 <p align="center">
   <img width="100%" alt="teaser" src="./assets/bmx-trees.gif">
 </p>
+
+## Installation
+To set up the repository locally, follow these steps:
+1. Clone the repository and navigate to the project directory:
+    ```bash
+    git clone https://github.com/Hydragon516/FFF-VDI.git
+    cd FFF-VDI
+    ```
+2. Create a new conda environment and activate it:
+   ```bash
+    conda create -n fff-vdi python=3.10
+    conda activate fff-vdi
+    ```
+3. Install torch and other dependencies:
+   ```bash
+   pip install torch torchvision
+   pip install -r requirements.txt
+   ```
+
