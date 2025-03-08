@@ -49,7 +49,7 @@ To set up the repository locally, follow these steps:
    pip install torch torchvision
    pip install -r requirements.txt
    ```
-We need [accelerate](https://github.com/huggingface/accelerate) for model training, so you should configure accelerate based on your hardware setup. Use the following command to configure it:
+You need [accelerate](https://github.com/huggingface/accelerate) for model training, so you should configure accelerate based on your hardware setup. Use the following command to configure it:
 ```bash
 accelerate config
 ```
