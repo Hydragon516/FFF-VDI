@@ -49,4 +49,25 @@ To set up the repository locally, follow these steps:
    pip install torch torchvision
    pip install -r requirements.txt
    ```
+We need [accelerate](https://github.com/huggingface/accelerate) for model training, so you should configure accelerate based on your hardware setup. Use the following command to configure it:
+```bash
+accelerate config
+```
 
+## Datasets
+We use the [YouTube-VOS]([http://saliencydetection.net/duts](https://youtube-vos.org/dataset/vos/)) train dataset for model training. Since FFF-VDI generates random masks during training, it only requires a set of RGB images. The complete dataset directory structure is as follows:
+
+```
+.
+└── dataset root/
+    └── youtube-vos/
+        └── JPEGImages/
+            ├── 00a23ccf53
+            ├── 00ad5016a4
+            └── ...
+```
+
+## TODO
+- [ ] Add training details 
+- [ ] Add DNA module
+- [ ] Add long video inference code
