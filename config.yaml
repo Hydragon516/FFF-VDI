@@ -4,12 +4,15 @@ pretrained_model_name_or_path: "stabilityai/stable-video-diffusion-img2vid-xt-1-
 data_root: "/SSD1/dataset/youtube-vos"
 width: 512
 height: 256
+num_frames: 25
 
 # training parameters
+seed: 123
 per_gpu_batch_size: 1
-learning_rate: 1e-5
+learning_rate: 0.00001 # 1e-5
 max_train_steps: 100000
 validation_steps: 1000
+mixed_precision: "fp16"
 
 # logging
 validation_steps: 1000
