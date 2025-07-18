@@ -651,7 +651,7 @@ def main():
                 model.register_to_config(**load_model.config)
 
                 model.load_state_dict(load_model.state_dict())
-                del load_modelco
+                del load_model
 
         accelerator.register_save_state_pre_hook(save_model_hook)
         accelerator.register_load_state_pre_hook(load_model_hook)
