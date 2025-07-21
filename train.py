@@ -51,49 +51,6 @@ def rand_log_normal(shape, loc=0., scale=1., device='cpu', dtype=torch.float32):
     u = torch.rand(shape, dtype=dtype, device=device) * (1 - 2e-7) + 1e-7
     return torch.distributions.Normal(loc, scale).icdf(u).exp()
 
-    def __getitem__(self, idx):
-        chosen_img_folder = random.choice(self.img_folders)
-        img_folder_path = os.path.join(self.base_folder, chosen_img_folder)
-        img_frames = os.listdir(img_folder_path)
-        img_frames.sort()
-
-        # Randomly select a start index for frame sequence
-        img_start_idx = random.randint(0, len(img_frames) - self.sample_frames)
-        selected_img_frames = img_frames[img_start_idx:img_start_idx + self.sample_frames]
-
-        # masks = create_random_shape_with_random_motion(len(selected_img_frames), imageHeight=self.height, imageWidth=self.width)
-        masks = create_random_square_with_random_motion(len(selected_img_frames), imageHeight=self.height, imageWidth=self.width)
-
-        # Initialize a tensor to store the pixel values
-        pixel_values = torch.empty((self.sample_frames, self.channels, self.height, self.width))
-        mask_values = torch.empty((self.sample_frames, 1, self.height, self.width))
-
-        # Load and process each frame
-        for i, frame_name in enumerate(selected_img_frames):
-            img_frame_path = os.path.join(img_folder_path, frame_name)
-            
-            img = Image.open(img_frame_path)
-            img_resized = img.resize((self.width, self.height))
-            img_tensor = torch.from_numpy(np.array(img_resized)).float()
-
-            # Normalize the image by scaling pixel values to [-1, 1]
-            img_normalized = img_tensor / 127.5 - 1
-
-            mask = masks[i]
-            mask_tensor = torch.from_numpy(np.array(mask)).float()
-            mask_tensor = mask_tensor / 255.0
-
-            # Rearrange channels if necessary
-            if self.channels == 3:
-                img_normalized = img_normalized.permute(2, 0, 1)  # For RGB images
-            elif self.channels == 1:
-                img_normalized = img_normalized.mean(dim=2, keepdim=True)  # For grayscale images
-
-            pixel_values[i] = img_normalized
-            mask_values[i] = mask_tensor.unsqueeze(0)
-
-        return {'pixel_values': pixel_values, 'mask_values': mask_values}
-
 # resizing utils
 # TODO: clean up later
 def _resize_with_antialiasing(input, size, interpolation="bicubic", align_corners=True):
